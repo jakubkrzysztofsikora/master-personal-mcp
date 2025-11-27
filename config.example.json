@@ -2,7 +2,7 @@
   "server": {
     "port": 3000,
     "host": "0.0.0.0",
-    "baseUrl": "https://master-personal-mcp.herokuapp.com"
+    "baseUrl": "https://master-personal-mcp-c2ed430a3a09.herokuapp.com"
   },
   "auth": {
     "enabled": true,

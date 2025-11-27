@@ -1,4 +1,5 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
+import cors from "cors";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { GatewayConfig, AuthenticatedRequest, HealthStatus } from "../types.js";
 import { AuthProvider } from "../auth/provider.js";
@@ -18,6 +19,13 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
   const app = express();
 
   // Middleware
+  app.use(cors({
+    origin: true, // Allow all origins for OAuth flow
+    credentials: true,
+    methods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Mcp-Session-Id"],
+    exposedHeaders: ["Mcp-Session-Id"],
+  }));
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
