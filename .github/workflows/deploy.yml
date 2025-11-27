@@ -84,4 +84,7 @@ jobs:
           echo "Health check failed after 5 attempts"
           echo "Trying root endpoint for debugging..."
           curl -v "${APP_URL}/" || true
+          echo ""
+          echo "=== HEROKU LOGS ==="
+          heroku logs --tail -n 100 --app ${{ env.HEROKU_APP_NAME }} || true
           exit 1
