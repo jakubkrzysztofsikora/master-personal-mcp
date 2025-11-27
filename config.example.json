@@ -8,18 +8,11 @@
     "enabled": true,
     "users": [
       {
-        "id": "user-1",
-        "email": "admin@example.com",
-        "name": "Admin User",
+        "id": "admin",
+        "email": "sikora@jakub.team",
+        "name": "Jakub Sikora",
         "token": "gw_live_xxxxxxxxxxxxxxxxxxxx",
         "scopes": ["tools:read", "tools:execute"]
-      },
-      {
-        "id": "user-2",
-        "email": "readonly@example.com",
-        "name": "Read Only User",
-        "token": "gw_live_yyyyyyyyyyyyyyyyyyyy",
-        "scopes": ["tools:read"]
       }
     ]
   },
