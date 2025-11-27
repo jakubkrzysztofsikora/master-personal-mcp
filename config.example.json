@@ -11,7 +11,7 @@
         "id": "admin",
         "email": "sikora@jakub.team",
         "name": "Jakub Sikora",
-        "token": "gw_live_xxxxxxxxxxxxxxxxxxxx",
+        "token": "gw_253c9b83f579729b167cd70a5784e028a0101863e0b607726ebfc64b6718e3e0",
         "scopes": ["tools:read", "tools:execute"]
       }
     ]
