@@ -2,6 +2,7 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { GatewayConfig, AuthenticatedRequest, HealthStatus } from "../types.js";
 import { AuthProvider } from "../auth/provider.js";
+import { OAuthProvider } from "../auth/oauth.js";
 import { createAuthMiddleware } from "../auth/middleware.js";
 import { GatewayServerFactory } from "./gateway.js";
 import { ServerPoolManager } from "../pool/manager.js";
@@ -18,6 +19,7 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
 
   // Middleware
   app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
 
   // Request logging middleware
   app.use((req: Request, _res: Response, next: NextFunction) => {
@@ -27,9 +29,10 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
     next();
   });
 
-  // Auth provider
+  // Auth providers
   const authProvider = new AuthProvider(config.auth);
-  const authMiddleware = createAuthMiddleware(authProvider);
+  const oauthProvider = new OAuthProvider(config);
+  const authMiddleware = createAuthMiddleware(authProvider, oauthProvider);
 
   // Gateway server factory
   const gatewayFactory = new GatewayServerFactory(poolManager);
@@ -50,6 +53,13 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
     res.json(status);
   });
 
+  // ==================== OAuth 2.1 Endpoints ====================
+
+  // OAuth Authorization Server Metadata (RFC 8414)
+  app.get("/.well-known/oauth-authorization-server", (_req: Request, res: Response) => {
+    res.json(oauthProvider.getMetadata());
+  });
+
   // OAuth Protected Resource Metadata (RFC 9728)
   app.get("/.well-known/oauth-protected-resource", (_req: Request, res: Response) => {
     res.json({
@@ -58,6 +68,140 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
       bearer_methods_supported: ["header"],
       scopes_supported: ["tools:read", "tools:execute"],
       resource_documentation: `${config.server.baseUrl}/docs`,
+    });
+  });
+
+  // Authorization endpoint - GET shows login page
+  app.get("/oauth/authorize", (req: Request, res: Response) => {
+    const params = {
+      client_id: req.query.client_id as string,
+      redirect_uri: req.query.redirect_uri as string,
+      response_type: req.query.response_type as string,
+      code_challenge: req.query.code_challenge as string,
+      code_challenge_method: req.query.code_challenge_method as string,
+      scope: req.query.scope as string,
+      state: req.query.state as string,
+    };
+
+    const validation = oauthProvider.validateAuthorizationRequest(params);
+    if (!validation.valid) {
+      if (params.redirect_uri) {
+        const redirectUrl = new URL(params.redirect_uri);
+        redirectUrl.searchParams.set("error", validation.error);
+        redirectUrl.searchParams.set("error_description", validation.errorDescription);
+        if (params.state) redirectUrl.searchParams.set("state", params.state);
+        res.redirect(redirectUrl.toString());
+      } else {
+        res.status(400).json({ error: validation.error, error_description: validation.errorDescription });
+      }
+      return;
+    }
+
+    // Show login page
+    res.type("html").send(oauthProvider.generateLoginPage(params));
+  });
+
+  // Authorization endpoint - POST handles login submission
+  app.post("/oauth/authorize", (req: Request, res: Response) => {
+    const { client_id, redirect_uri, state, scope, code_challenge, code_challenge_method, email } = req.body;
+
+    // Validate the authorization request again
+    const validation = oauthProvider.validateAuthorizationRequest({
+      client_id,
+      redirect_uri,
+      response_type: "code",
+      code_challenge,
+      code_challenge_method,
+      scope,
+      state,
+    });
+
+    if (!validation.valid) {
+      res.status(400).json({ error: validation.error, error_description: validation.errorDescription });
+      return;
+    }
+
+    // Authenticate user
+    const user = oauthProvider.authenticateUser(email);
+    if (!user) {
+      // Show login page with error
+      res.type("html").send(oauthProvider.generateLoginPage({
+        client_id,
+        redirect_uri,
+        state,
+        scope,
+        code_challenge,
+        code_challenge_method,
+      }).replace('</form>', '<p style="color: red; margin-top: 10px;">User not found. Please use a registered email.</p></form>'));
+      return;
+    }
+
+    // Create authorization code
+    const scopes = scope?.split(" ") || ["tools:read", "tools:execute"];
+    const code = oauthProvider.createAuthorizationCode(
+      client_id,
+      redirect_uri,
+      user.id,
+      scopes,
+      code_challenge,
+      code_challenge_method || "S256"
+    );
+
+    // Redirect back to client with code
+    const redirectUrl = new URL(redirect_uri);
+    redirectUrl.searchParams.set("code", code);
+    if (state) redirectUrl.searchParams.set("state", state);
+
+    logger.info("Authorization successful, redirecting", { clientId: client_id, userId: user.id });
+    res.redirect(redirectUrl.toString());
+  });
+
+  // Token endpoint
+  app.post("/oauth/token", (req: Request, res: Response) => {
+    const result = oauthProvider.exchangeCode({
+      grant_type: req.body.grant_type,
+      code: req.body.code,
+      redirect_uri: req.body.redirect_uri,
+      client_id: req.body.client_id,
+      code_verifier: req.body.code_verifier,
+    });
+
+    if (!result.success) {
+      res.status(400).json({
+        error: result.error,
+        error_description: result.errorDescription,
+      });
+      return;
+    }
+
+    res.json({
+      access_token: result.accessToken,
+      token_type: result.tokenType,
+      expires_in: result.expiresIn,
+      scope: result.scope,
+    });
+  });
+
+  // Dynamic client registration (simplified)
+  app.post("/oauth/register", (req: Request, res: Response) => {
+    const { client_name, redirect_uris } = req.body;
+
+    if (!client_name || !redirect_uris || !Array.isArray(redirect_uris)) {
+      res.status(400).json({
+        error: "invalid_request",
+        error_description: "client_name and redirect_uris are required",
+      });
+      return;
+    }
+
+    // Generate a client ID (in production, store this)
+    const clientId = `client_${Date.now()}`;
+
+    res.status(201).json({
+      client_id: clientId,
+      client_name,
+      redirect_uris,
+      token_endpoint_auth_method: "none",
     });
   });
 
