@@ -12,10 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package installer) for Garmin MCP
+# pip3 installs to /usr/local/bin by default with --break-system-packages
 RUN pip3 install uv --break-system-packages
 
-# Ensure uv/uvx is in PATH
-ENV PATH="/root/.local/bin:$PATH"
+# Verify uv/uvx are available
+RUN which uvx && uvx --version
 
 WORKDIR /app
 
@@ -29,13 +30,9 @@ COPY config.example.json ./config.json
 
 # Environment
 ENV NODE_ENV=production
-ENV PORT=3000
 ENV CONFIG_PATH=/app/config.json
 
+# Note: PORT is provided by Heroku at runtime, don't hardcode it
 EXPOSE 3000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-  CMD node -e "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1))"
 
 CMD ["node", "dist/index.js"]

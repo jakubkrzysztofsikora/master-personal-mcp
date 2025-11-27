@@ -24,25 +24,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Initialize server pool
+  // Initialize server pool (don't start servers yet)
   const poolManager = new ServerPoolManager(config.mcpServers);
-
-  // Start all configured MCP servers
-  try {
-    await poolManager.startAll();
-    logger.info("Server pool initialized", {
-      connectedServers: poolManager.connectedCount,
-      totalTools: poolManager.toolCount,
-    });
-  } catch (error) {
-    logger.error("Failed to initialize server pool", error as Error);
-    // Continue - some servers may have started
-  }
 
   // Create Express app
   const app = createApp(config, poolManager);
 
-  // Start HTTP server
+  // Start HTTP server FIRST so health checks work immediately
   const server = app.listen(config.server.port, config.server.host, () => {
     logger.info(`MCP Gateway Server listening`, {
       host: config.server.host,
@@ -52,6 +40,18 @@ async function main(): Promise<void> {
     logger.info(`Health check: ${config.server.baseUrl}/health`);
     logger.info(`MCP endpoint: ${config.server.baseUrl}/mcp`);
     logger.info(`Documentation: ${config.server.baseUrl}/docs`);
+  });
+
+  // Start MCP servers in the background (non-blocking)
+  // This allows health checks to pass while servers are connecting
+  poolManager.startAll().then(() => {
+    logger.info("Server pool initialized", {
+      connectedServers: poolManager.connectedCount,
+      totalTools: poolManager.toolCount,
+    });
+  }).catch((error) => {
+    logger.error("Failed to initialize server pool", error as Error);
+    // Continue - health check still works, just no MCP tools available yet
   });
 
   // Graceful shutdown

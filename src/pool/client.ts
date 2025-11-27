@@ -4,6 +4,21 @@ import type { McpServerConfig, McpTool } from "../types.js";
 import { ServerConnectionError, ServerExecutionError } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
 
+// Connection timeout in milliseconds (30 seconds)
+const CONNECTION_TIMEOUT_MS = 30000;
+
+/**
+ * Helper to add timeout to a promise
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout: ${message}`)), ms)
+    ),
+  ]);
+}
+
 /**
  * Client wrapper for a local MCP server connection via stdio
  */
@@ -89,12 +104,20 @@ export class LocalServerClient {
         version: "1.0.0",
       });
 
-      // Connect
-      await this.client.connect(this.transport);
+      // Connect with timeout
+      await withTimeout(
+        this.client.connect(this.transport),
+        CONNECTION_TIMEOUT_MS,
+        `Connection to server ${this.id} timed out`
+      );
       this._connected = true;
 
-      // Fetch capabilities
-      await this.refreshCapabilities();
+      // Fetch capabilities with timeout
+      await withTimeout(
+        this.refreshCapabilities(),
+        CONNECTION_TIMEOUT_MS,
+        `Fetching capabilities from ${this.id} timed out`
+      );
 
       logger.info(`Connected to server ${this.id}`, { toolCount: this.tools.length });
     } catch (error) {
