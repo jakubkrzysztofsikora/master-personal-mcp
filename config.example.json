@@ -38,7 +38,7 @@
         "GARMIN_EMAIL": "${GARMIN_EMAIL}",
         "GARMIN_PASSWORD": "${GARMIN_PASSWORD}"
       },
-      "enabled": true,
+      "enabled": false,
       "requiredScopes": ["tools:read"]
     }
   ]
