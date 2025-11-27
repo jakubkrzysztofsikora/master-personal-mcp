@@ -34,6 +34,11 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
   // Gateway server factory
   const gatewayFactory = new GatewayServerFactory(poolManager);
 
+  // Root route - simple ping
+  app.get("/", (_req: Request, res: Response) => {
+    res.json({ service: "mcp-gateway-server", status: "running" });
+  });
+
   // Health check endpoint (no auth required)
   app.get("/health", (_req: Request, res: Response) => {
     const status: HealthStatus = {
