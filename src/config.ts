@@ -10,6 +10,7 @@ const UserConfigSchema = z.object({
   id: z.string().min(1),
   email: z.string().email(),
   name: z.string().min(1),
+  password: z.string().min(1),
   token: z.string().min(1),
   scopes: z.array(z.string()),
 });

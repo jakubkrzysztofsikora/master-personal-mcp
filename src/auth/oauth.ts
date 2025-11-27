@@ -277,10 +277,18 @@ export class OAuthProvider {
   }
 
   /**
-   * Authenticate user with email (simplified - in production use password)
+   * Authenticate user with email and password
    */
-  authenticateUser(email: string): UserConfig | undefined {
-    return this.users.get(email);
+  authenticateUser(email: string, password: string): UserConfig | undefined {
+    const user = this.users.get(email);
+    if (!user) {
+      return undefined;
+    }
+    // Verify password
+    if (user.password !== password) {
+      return undefined;
+    }
+    return user;
   }
 
   /**
@@ -366,7 +374,8 @@ export class OAuthProvider {
       font-weight: 500;
       color: #333;
     }
-    input[type="email"] {
+    input[type="email"],
+    input[type="password"] {
       width: 100%;
       padding: 12px 16px;
       border: 2px solid #e0e0e0;
@@ -375,7 +384,8 @@ export class OAuthProvider {
       margin-bottom: 16px;
       transition: border-color 0.2s;
     }
-    input[type="email"]:focus {
+    input[type="email"]:focus,
+    input[type="password"]:focus {
       outline: none;
       border-color: #667eea;
     }
@@ -432,6 +442,9 @@ export class OAuthProvider {
 
       <label for="email">Email address</label>
       <input type="email" id="email" name="email" placeholder="you@example.com" required>
+
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" placeholder="Your password" required>
 
       <button type="submit">Authorize</button>
     </form>

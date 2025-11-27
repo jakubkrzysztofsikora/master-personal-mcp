@@ -111,7 +111,7 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
 
   // Authorization endpoint - POST handles login submission
   app.post("/oauth/authorize", (req: Request, res: Response) => {
-    const { client_id, redirect_uri, state, scope, code_challenge, code_challenge_method, email } = req.body;
+    const { client_id, redirect_uri, state, scope, code_challenge, code_challenge_method, email, password } = req.body;
 
     // Validate the authorization request again
     const validation = oauthProvider.validateAuthorizationRequest({
@@ -129,8 +129,8 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
       return;
     }
 
-    // Authenticate user
-    const user = oauthProvider.authenticateUser(email);
+    // Authenticate user with email and password
+    const user = oauthProvider.authenticateUser(email, password);
     if (!user) {
       // Show login page with error
       res.type("html").send(oauthProvider.generateLoginPage({
@@ -140,7 +140,7 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
         scope,
         code_challenge,
         code_challenge_method,
-      }).replace('</form>', '<p style="color: red; margin-top: 10px;">User not found. Please use a registered email.</p></form>'));
+      }).replace('</form>', '<p style="color: red; margin-top: 10px;">Invalid email or password.</p></form>'));
       return;
     }
 
