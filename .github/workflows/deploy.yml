@@ -1,0 +1,61 @@
+name: Deploy to Heroku
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  HEROKU_APP_NAME: master-personal-mcp
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Run type check
+        run: npm run typecheck
+
+      - name: Login to Heroku Container Registry
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: |
+          echo $HEROKU_API_KEY | docker login --username=_ --password-stdin registry.heroku.com
+
+      - name: Build and push Docker image
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: |
+          docker build -t registry.heroku.com/${{ env.HEROKU_APP_NAME }}/web .
+          docker push registry.heroku.com/${{ env.HEROKU_APP_NAME }}/web
+
+      - name: Release to Heroku
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: |
+          curl -n -X PATCH https://api.heroku.com/apps/${{ env.HEROKU_APP_NAME }}/formation \
+            -d '{"updates":[{"type":"web","docker_image":"'"$(docker inspect registry.heroku.com/${{ env.HEROKU_APP_NAME }}/web --format='{{.Id}}')"'"}]}' \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/vnd.heroku+json; version=3.docker-releases" \
+            -H "Authorization: Bearer ${{ secrets.HEROKU_API_KEY }}"
+
+      - name: Health check
+        run: |
+          sleep 30
+          curl -f https://${{ env.HEROKU_APP_NAME }}-d16425b748f9.herokuapp.com/health || exit 1

@@ -1,0 +1,45 @@
+{
+  "server": {
+    "port": 3000,
+    "host": "0.0.0.0",
+    "baseUrl": "https://master-personal-mcp-d16425b748f9.herokuapp.com"
+  },
+  "auth": {
+    "enabled": true,
+    "users": [
+      {
+        "id": "user-1",
+        "email": "admin@example.com",
+        "name": "Admin User",
+        "token": "gw_live_xxxxxxxxxxxxxxxxxxxx",
+        "scopes": ["tools:read", "tools:execute"]
+      },
+      {
+        "id": "user-2",
+        "email": "readonly@example.com",
+        "name": "Read Only User",
+        "token": "gw_live_yyyyyyyyyyyyyyyyyyyy",
+        "scopes": ["tools:read"]
+      }
+    ]
+  },
+  "mcpServers": [
+    {
+      "id": "garmin",
+      "name": "Garmin Connect",
+      "description": "Access Garmin fitness and health data - activities, sleep, steps, heart rate, body composition",
+      "command": "uvx",
+      "args": [
+        "--python", "3.12",
+        "--from", "git+https://github.com/Taxuspt/garmin_mcp",
+        "garmin-mcp"
+      ],
+      "env": {
+        "GARMIN_EMAIL": "${GARMIN_EMAIL}",
+        "GARMIN_PASSWORD": "${GARMIN_PASSWORD}"
+      },
+      "enabled": true,
+      "requiredScopes": ["tools:read"]
+    }
+  ]
+}
