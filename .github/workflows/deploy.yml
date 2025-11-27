@@ -64,7 +64,7 @@ jobs:
           sleep 60
           for i in 1 2 3 4 5; do
             echo "Health check attempt $i..."
-            HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" https://${{ env.HEROKU_APP_NAME }}-d16425b748f9.herokuapp.com/health || echo "000")
+            HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" https://${{ env.HEROKU_APP_NAME }}.herokuapp.com/health || echo "000")
             echo "HTTP response code: $HTTP_CODE"
             cat /tmp/response.txt || true
             echo ""
@@ -77,5 +77,5 @@ jobs:
           done
           echo "Health check failed after 5 attempts"
           echo "Trying root endpoint for debugging..."
-          curl -v https://${{ env.HEROKU_APP_NAME }}-d16425b748f9.herokuapp.com/ || true
+          curl -v https://${{ env.HEROKU_APP_NAME }}.herokuapp.com/ || true
           exit 1
