@@ -59,12 +59,18 @@ jobs:
           heroku container:release web --app ${{ env.HEROKU_APP_NAME }}
 
       - name: Health check
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
         run: |
+          echo "Getting app URL from Heroku..."
+          APP_URL=$(heroku apps:info --app ${{ env.HEROKU_APP_NAME }} --json | jq -r '.app.web_url' | sed 's:/*$::')
+          echo "App URL: $APP_URL"
+
           echo "Waiting for Heroku dyno to start..."
           sleep 60
           for i in 1 2 3 4 5; do
             echo "Health check attempt $i..."
-            HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" https://${{ env.HEROKU_APP_NAME }}.herokuapp.com/health || echo "000")
+            HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" "${APP_URL}/health" || echo "000")
             echo "HTTP response code: $HTTP_CODE"
             cat /tmp/response.txt || true
             echo ""
@@ -77,5 +83,5 @@ jobs:
           done
           echo "Health check failed after 5 attempts"
           echo "Trying root endpoint for debugging..."
-          curl -v https://${{ env.HEROKU_APP_NAME }}.herokuapp.com/ || true
+          curl -v "${APP_URL}/" || true
           exit 1
