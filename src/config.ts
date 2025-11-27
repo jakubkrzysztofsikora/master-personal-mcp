@@ -143,7 +143,21 @@ export function loadConfig(): GatewayConfig {
   }
 
   // Resolve environment variable references
-  const resolvedConfig = resolveEnvVars(rawConfig);
+  const resolvedConfig = resolveEnvVars(rawConfig) as Record<string, unknown>;
+
+  // Override port with PORT env var (required for Heroku)
+  // Heroku dynamically assigns PORT and the app MUST bind to it
+  if (process.env.PORT) {
+    const port = parseInt(process.env.PORT, 10);
+    if (!isNaN(port)) {
+      logger.info(`Overriding port with PORT env var: ${port}`);
+      if (resolvedConfig.server && typeof resolvedConfig.server === "object") {
+        (resolvedConfig.server as Record<string, unknown>).port = port;
+      } else {
+        resolvedConfig.server = { port, host: "0.0.0.0", baseUrl: `http://localhost:${port}` };
+      }
+    }
+  }
 
   // Validate configuration
   const result = GatewayConfigSchema.safeParse(resolvedConfig);
