@@ -377,7 +377,7 @@ export class GatewayOAuthProvider implements OAuthServerProvider {
       `).join("")}
     </div>
 
-    <form method="POST" action="/authorize/callback">
+    <form method="POST" action="/oauth/authorize/callback">
       <input type="hidden" name="client_id" value="${client.client_id}">
       <input type="hidden" name="redirect_uri" value="${params.redirectUri}">
       <input type="hidden" name="state" value="${params.state || ""}">

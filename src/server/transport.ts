@@ -66,13 +66,53 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
     res.json(status);
   });
 
-  // ==================== OAuth Routes (SDK-provided) ====================
-  // resourceServerUrl points to our MCP endpoint for proper protected resource metadata
+  // ==================== OAuth Configuration ====================
+  // Claude.ai expects OAuth endpoints at /oauth/* paths per MCP spec
   const mcpEndpoint = new URL("/mcp", baseUrl);
-  app.use(mcpAuthRouter({
+
+  // Create custom OAuth metadata with /oauth/* paths (Claude.ai requirement)
+  const oauthMetadata = {
+    issuer: baseUrl.href,
+    service_documentation: new URL("/docs", baseUrl).href,
+    authorization_endpoint: new URL("/oauth/authorize", baseUrl).href,
+    response_types_supported: ["code"],
+    code_challenge_methods_supported: ["S256"],
+    token_endpoint: new URL("/oauth/token", baseUrl).href,
+    token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    scopes_supported: ["tools:read", "tools:execute"],
+    revocation_endpoint: new URL("/oauth/revoke", baseUrl).href,
+    revocation_endpoint_auth_methods_supported: ["client_secret_post"],
+    registration_endpoint: new URL("/oauth/register", baseUrl).href,
+  };
+
+  // Protected resource metadata (RFC 9728)
+  const protectedResourceMetadata = {
+    resource: mcpEndpoint.href,
+    authorization_servers: [baseUrl.href],
+    scopes_supported: ["tools:read", "tools:execute"],
+    resource_name: "MCP Gateway",
+    resource_documentation: new URL("/docs", baseUrl).href,
+  };
+
+  // Serve OAuth Authorization Server Metadata (RFC 8414)
+  app.get("/.well-known/oauth-authorization-server", (_req: Request, res: Response) => {
+    res.json(oauthMetadata);
+  });
+
+  // Serve OAuth Protected Resource Metadata (RFC 9728)
+  app.get("/.well-known/oauth-protected-resource", (_req: Request, res: Response) => {
+    res.json(protectedResourceMetadata);
+  });
+  app.get("/.well-known/oauth-protected-resource/mcp", (_req: Request, res: Response) => {
+    res.json(protectedResourceMetadata);
+  });
+
+  // Mount OAuth router at /oauth (endpoints will be at /oauth/authorize, /oauth/token, etc.)
+  app.use("/oauth", mcpAuthRouter({
     provider: oauthProvider,
     issuerUrl: baseUrl,
-    baseUrl: baseUrl,
+    baseUrl: baseUrl,  // The router will create /authorize, /token internally
     resourceServerUrl: mcpEndpoint,
     serviceDocumentationUrl: new URL("/docs", baseUrl),
     scopesSupported: ["tools:read", "tools:execute"],
@@ -80,7 +120,7 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
   }));
 
   // Custom callback handler for login form submission
-  app.post("/authorize/callback", (req: Request, res: Response) => {
+  app.post("/oauth/authorize/callback", (req: Request, res: Response) => {
     const { client_id, redirect_uri, state, scope, code_challenge, email, password } = req.body;
 
     // Get the client (may be a promise)
@@ -95,7 +135,7 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
         const user = oauthProvider.authenticateUser(email, password);
         if (!user) {
           // Redirect back to authorize with error shown
-          const errorUrl = `/authorize?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirect_uri)}&response_type=code&code_challenge=${encodeURIComponent(code_challenge)}&code_challenge_method=S256&state=${encodeURIComponent(state || "")}&scope=${encodeURIComponent(scope || "")}&error=invalid_credentials`;
+          const errorUrl = `/oauth/authorize?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirect_uri)}&response_type=code&code_challenge=${encodeURIComponent(code_challenge)}&code_challenge_method=S256&state=${encodeURIComponent(state || "")}&scope=${encodeURIComponent(scope || "")}&error=invalid_credentials`;
           res.redirect(errorUrl);
           return;
         }
