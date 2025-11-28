@@ -53,6 +53,12 @@ jobs:
           docker build -t registry.heroku.com/${{ env.HEROKU_APP_NAME }}/web .
           docker push registry.heroku.com/${{ env.HEROKU_APP_NAME }}/web
 
+      - name: Set Heroku config vars
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: |
+          heroku config:set MCP_GATEWAY_PASSWORD="${{ secrets.MCP_GATEWAY_PASSWORD }}" --app ${{ env.HEROKU_APP_NAME }}
+
       - name: Release to Heroku
         env:
           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
