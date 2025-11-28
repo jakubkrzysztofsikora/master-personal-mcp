@@ -214,7 +214,12 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
   });
 
   // Create auth middleware using SDK's bearer auth
-  const authMiddleware = requireBearerAuth({ verifier: oauthProvider });
+  // Include resourceMetadataUrl so Claude.ai can discover OAuth server via WWW-Authenticate header
+  const resourceMetadataUrl = new URL("/.well-known/oauth-protected-resource/mcp", baseUrl).href;
+  const authMiddleware = requireBearerAuth({
+    verifier: oauthProvider,
+    resourceMetadataUrl
+  });
 
   // ==================== MCP Streamable HTTP Endpoint (following SDK pattern) ====================
 
