@@ -61,12 +61,16 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
   });
 
   // ==================== OAuth Routes (SDK-provided) ====================
+  // resourceServerUrl points to our MCP endpoint for proper protected resource metadata
+  const mcpEndpoint = new URL("/mcp", baseUrl);
   app.use(mcpAuthRouter({
     provider: oauthProvider,
     issuerUrl: baseUrl,
     baseUrl: baseUrl,
+    resourceServerUrl: mcpEndpoint,
     serviceDocumentationUrl: new URL("/docs", baseUrl),
     scopesSupported: ["tools:read", "tools:execute"],
+    resourceName: "MCP Gateway",
   }));
 
   // Custom callback handler for login form submission
