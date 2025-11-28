@@ -1,10 +1,10 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import type { GatewayConfig, AuthenticatedRequest, HealthStatus } from "../types.js";
-import { AuthProvider } from "../auth/provider.js";
-import { OAuthProvider } from "../auth/oauth.js";
-import { createAuthMiddleware } from "../auth/middleware.js";
+import { GatewayOAuthProvider } from "../auth/oauth.js";
 import { GatewayServerFactory } from "./gateway.js";
 import { ServerPoolManager } from "../pool/manager.js";
 import { GatewayError } from "../utils/errors.js";
@@ -20,7 +20,7 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
 
   // Middleware
   app.use(cors({
-    origin: true, // Allow all origins for OAuth flow
+    origin: true,
     credentials: true,
     methods: ["GET", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "Mcp-Session-Id"],
@@ -37,10 +37,9 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
     next();
   });
 
-  // Auth providers
-  const authProvider = new AuthProvider(config.auth);
-  const oauthProvider = new OAuthProvider(config);
-  const authMiddleware = createAuthMiddleware(authProvider, oauthProvider);
+  // OAuth provider
+  const oauthProvider = new GatewayOAuthProvider(config);
+  const baseUrl = new URL(config.server.baseUrl);
 
   // Gateway server factory
   const gatewayFactory = new GatewayServerFactory(poolManager);
@@ -61,156 +60,58 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
     res.json(status);
   });
 
-  // ==================== OAuth 2.1 Endpoints ====================
+  // ==================== OAuth Routes (SDK-provided) ====================
+  app.use(mcpAuthRouter({
+    provider: oauthProvider,
+    issuerUrl: baseUrl,
+    baseUrl: baseUrl,
+    serviceDocumentationUrl: new URL("/docs", baseUrl),
+    scopesSupported: ["tools:read", "tools:execute"],
+  }));
 
-  // OAuth Authorization Server Metadata (RFC 8414)
-  app.get("/.well-known/oauth-authorization-server", (_req: Request, res: Response) => {
-    res.json(oauthProvider.getMetadata());
-  });
+  // Custom callback handler for login form submission
+  app.post("/oauth/authorize/callback", (req: Request, res: Response) => {
+    const { client_id, redirect_uri, state, scope, code_challenge, email, password } = req.body;
 
-  // OAuth Protected Resource Metadata (RFC 9728)
-  app.get("/.well-known/oauth-protected-resource", (_req: Request, res: Response) => {
-    res.json({
-      resource: config.server.baseUrl,
-      authorization_servers: [config.server.baseUrl],
-      bearer_methods_supported: ["header"],
-      scopes_supported: ["tools:read", "tools:execute"],
-      resource_documentation: `${config.server.baseUrl}/docs`,
-    });
-  });
+    // Get the client (may be a promise)
+    Promise.resolve(oauthProvider.clientsStore.getClient(client_id))
+      .then((client) => {
+        if (!client) {
+          res.status(400).json({ error: "invalid_client", error_description: "Unknown client" });
+          return;
+        }
 
-  // Authorization endpoint - GET shows login page
-  app.get("/oauth/authorize", (req: Request, res: Response) => {
-    const params = {
-      client_id: req.query.client_id as string,
-      redirect_uri: req.query.redirect_uri as string,
-      response_type: req.query.response_type as string,
-      code_challenge: req.query.code_challenge as string,
-      code_challenge_method: req.query.code_challenge_method as string,
-      scope: req.query.scope as string,
-      state: req.query.state as string,
-    };
+        // Authenticate user
+        const user = oauthProvider.authenticateUser(email, password);
+        if (!user) {
+          // Redirect back to authorize with error shown
+          const errorUrl = `/oauth/authorize?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirect_uri)}&response_type=code&code_challenge=${encodeURIComponent(code_challenge)}&code_challenge_method=S256&state=${encodeURIComponent(state || "")}&scope=${encodeURIComponent(scope || "")}&error=invalid_credentials`;
+          res.redirect(errorUrl);
+          return;
+        }
 
-    const validation = oauthProvider.validateAuthorizationRequest(params);
-    if (!validation.valid) {
-      if (params.redirect_uri) {
-        const redirectUrl = new URL(params.redirect_uri);
-        redirectUrl.searchParams.set("error", validation.error);
-        redirectUrl.searchParams.set("error_description", validation.errorDescription);
-        if (params.state) redirectUrl.searchParams.set("state", params.state);
+        // Create authorization code
+        const scopes = scope?.split(" ") || ["tools:read", "tools:execute"];
+        const code = oauthProvider.createAuthorizationCode(
+          client_id,
+          redirect_uri,
+          user.id,
+          scopes,
+          code_challenge
+        );
+
+        // Redirect back to client with code
+        const redirectUrl = new URL(redirect_uri);
+        redirectUrl.searchParams.set("code", code);
+        if (state) redirectUrl.searchParams.set("state", state);
+
+        logger.info("Authorization successful, redirecting", { clientId: client_id, userId: user.id });
         res.redirect(redirectUrl.toString());
-      } else {
-        res.status(400).json({ error: validation.error, error_description: validation.errorDescription });
-      }
-      return;
-    }
-
-    // Show login page
-    res.type("html").send(oauthProvider.generateLoginPage(params));
-  });
-
-  // Authorization endpoint - POST handles login submission
-  app.post("/oauth/authorize", (req: Request, res: Response) => {
-    const { client_id, redirect_uri, state, scope, code_challenge, code_challenge_method, email, password } = req.body;
-
-    // Validate the authorization request again
-    const validation = oauthProvider.validateAuthorizationRequest({
-      client_id,
-      redirect_uri,
-      response_type: "code",
-      code_challenge,
-      code_challenge_method,
-      scope,
-      state,
-    });
-
-    if (!validation.valid) {
-      res.status(400).json({ error: validation.error, error_description: validation.errorDescription });
-      return;
-    }
-
-    // Authenticate user with email and password
-    const user = oauthProvider.authenticateUser(email, password);
-    if (!user) {
-      // Show login page with error
-      res.type("html").send(oauthProvider.generateLoginPage({
-        client_id,
-        redirect_uri,
-        state,
-        scope,
-        code_challenge,
-        code_challenge_method,
-      }).replace('</form>', '<p style="color: red; margin-top: 10px;">Invalid email or password.</p></form>'));
-      return;
-    }
-
-    // Create authorization code
-    const scopes = scope?.split(" ") || ["tools:read", "tools:execute"];
-    const code = oauthProvider.createAuthorizationCode(
-      client_id,
-      redirect_uri,
-      user.id,
-      scopes,
-      code_challenge,
-      code_challenge_method || "S256"
-    );
-
-    // Redirect back to client with code
-    const redirectUrl = new URL(redirect_uri);
-    redirectUrl.searchParams.set("code", code);
-    if (state) redirectUrl.searchParams.set("state", state);
-
-    logger.info("Authorization successful, redirecting", { clientId: client_id, userId: user.id });
-    res.redirect(redirectUrl.toString());
-  });
-
-  // Token endpoint
-  app.post("/oauth/token", (req: Request, res: Response) => {
-    const result = oauthProvider.exchangeCode({
-      grant_type: req.body.grant_type,
-      code: req.body.code,
-      redirect_uri: req.body.redirect_uri,
-      client_id: req.body.client_id,
-      code_verifier: req.body.code_verifier,
-    });
-
-    if (!result.success) {
-      res.status(400).json({
-        error: result.error,
-        error_description: result.errorDescription,
+      })
+      .catch((err) => {
+        logger.error("Error in authorize callback", err as Error);
+        res.status(500).json({ error: "server_error", error_description: "Internal error" });
       });
-      return;
-    }
-
-    res.json({
-      access_token: result.accessToken,
-      token_type: result.tokenType,
-      expires_in: result.expiresIn,
-      scope: result.scope,
-    });
-  });
-
-  // Dynamic client registration (simplified)
-  app.post("/oauth/register", (req: Request, res: Response) => {
-    const { client_name, redirect_uris } = req.body;
-
-    if (!client_name || !redirect_uris || !Array.isArray(redirect_uris)) {
-      res.status(400).json({
-        error: "invalid_request",
-        error_description: "client_name and redirect_uris are required",
-      });
-      return;
-    }
-
-    // Generate a client ID (in production, store this)
-    const clientId = `client_${Date.now()}`;
-
-    res.status(201).json({
-      client_id: clientId,
-      client_name,
-      redirect_uris,
-      token_endpoint_auth_method: "none",
-    });
   });
 
   // Simple docs endpoint
@@ -239,8 +140,7 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
   <pre>POST ${config.server.baseUrl}/mcp</pre>
 
   <h2>Authentication</h2>
-  <p>Include a Bearer token in the Authorization header:</p>
-  <pre>Authorization: Bearer your-token-here</pre>
+  <p>This server uses OAuth 2.1. Connect via Claude.ai or use a Bearer token.</p>
 
   <h2>Available Tools (${tools.length})</h2>
   ${tools.map((tool) => `
@@ -263,11 +163,13 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
     res.type("html").send(html);
   });
 
+  // Create auth middleware using SDK's bearer auth
+  const authMiddleware = requireBearerAuth({ verifier: oauthProvider });
+
   // MCP Streamable HTTP endpoint
   app.post("/mcp", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const user = req.user;
-      const server = gatewayFactory.createServer(user);
+      const server = gatewayFactory.createServer();
 
       // Create transport for this request
       const transport = new StreamableHTTPServerTransport({
@@ -306,8 +208,7 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
   // GET endpoint for SSE (server-sent events)
   app.get("/mcp", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const user = req.user;
-      const server = gatewayFactory.createServer(user);
+      const server = gatewayFactory.createServer();
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
