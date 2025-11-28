@@ -70,7 +70,7 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
   }));
 
   // Custom callback handler for login form submission
-  app.post("/oauth/authorize/callback", (req: Request, res: Response) => {
+  app.post("/authorize/callback", (req: Request, res: Response) => {
     const { client_id, redirect_uri, state, scope, code_challenge, email, password } = req.body;
 
     // Get the client (may be a promise)
@@ -85,7 +85,7 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
         const user = oauthProvider.authenticateUser(email, password);
         if (!user) {
           // Redirect back to authorize with error shown
-          const errorUrl = `/oauth/authorize?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirect_uri)}&response_type=code&code_challenge=${encodeURIComponent(code_challenge)}&code_challenge_method=S256&state=${encodeURIComponent(state || "")}&scope=${encodeURIComponent(scope || "")}&error=invalid_credentials`;
+          const errorUrl = `/authorize?client_id=${encodeURIComponent(client_id)}&redirect_uri=${encodeURIComponent(redirect_uri)}&response_type=code&code_challenge=${encodeURIComponent(code_challenge)}&code_challenge_method=S256&state=${encodeURIComponent(state || "")}&scope=${encodeURIComponent(scope || "")}&error=invalid_credentials`;
           res.redirect(errorUrl);
           return;
         }
