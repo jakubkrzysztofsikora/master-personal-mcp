@@ -1,8 +1,10 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
+import { randomUUID } from "crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { GatewayConfig, AuthenticatedRequest, HealthStatus } from "../types.js";
 import { GatewayOAuthProvider } from "../auth/oauth.js";
 import { GatewayServerFactory } from "./gateway.js";
@@ -12,18 +14,21 @@ import { logger } from "../utils/logger.js";
 
 const startTime = Date.now();
 
+// Map to store transports by session ID (following SDK pattern)
+const transports: Record<string, StreamableHTTPServerTransport> = {};
+
 /**
  * Create and configure the Express application
  */
 export function createApp(config: GatewayConfig, poolManager: ServerPoolManager): Express {
   const app = express();
 
-  // Middleware
+  // Middleware - CORS must allow all origins for Claude.ai
   app.use(cors({
-    origin: true,
+    origin: "*",
     credentials: true,
     methods: ["GET", "POST", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Mcp-Session-Id"],
+    allowedHeaders: ["Content-Type", "Authorization", "Mcp-Session-Id", "Last-Event-ID"],
     exposedHeaders: ["Mcp-Session-Id"],
   }));
   app.use(express.json());
@@ -33,6 +38,7 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
   app.use((req: Request, _res: Response, next: NextFunction) => {
     logger.debug(`${req.method} ${req.path}`, {
       userAgent: req.headers["user-agent"],
+      sessionId: req.headers["mcp-session-id"],
     });
     next();
   });
@@ -170,27 +176,69 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
   // Create auth middleware using SDK's bearer auth
   const authMiddleware = requireBearerAuth({ verifier: oauthProvider });
 
-  // MCP Streamable HTTP endpoint
+  // ==================== MCP Streamable HTTP Endpoint (following SDK pattern) ====================
+
+  // POST handler - main MCP request handler
   app.post("/mcp", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+    logger.debug("MCP POST request", {
+      sessionId,
+      isInitialize: isInitializeRequest(req.body),
+      method: req.body?.method
+    });
+
     try {
-      const server = gatewayFactory.createServer();
+      let transport: StreamableHTTPServerTransport;
 
-      // Create transport for this request
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined, // Stateless mode
-      });
+      if (sessionId && transports[sessionId]) {
+        // Reuse existing transport for known session
+        transport = transports[sessionId];
+        logger.debug("Reusing existing transport", { sessionId });
+      } else if (!sessionId && isInitializeRequest(req.body)) {
+        // New initialization request - create new transport with session
+        logger.info("Creating new MCP session");
 
-      // Handle request close
-      res.on("close", () => {
-        transport.close().catch((err) => {
-          logger.error("Error closing transport", err as Error);
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (newSessionId) => {
+            // Store transport when session is initialized
+            logger.info("Session initialized", { sessionId: newSessionId });
+            transports[newSessionId] = transport;
+          }
         });
-      });
 
-      // Connect server to transport
-      await server.connect(transport);
+        // Clean up on transport close
+        transport.onclose = () => {
+          const sid = transport.sessionId;
+          if (sid && transports[sid]) {
+            logger.info("Transport closed, removing session", { sessionId: sid });
+            delete transports[sid];
+          }
+        };
 
-      // Handle the request
+        // Create and connect the MCP server
+        const server = gatewayFactory.createServer();
+        await server.connect(transport);
+
+        // Handle the initialization request
+        await transport.handleRequest(req, res, req.body);
+        return;
+      } else {
+        // Invalid request - no session ID and not an initialization request
+        logger.warn("Invalid MCP request - no session or not initialize", { sessionId, body: req.body });
+        res.status(400).json({
+          jsonrpc: "2.0",
+          error: {
+            code: -32000,
+            message: "Bad Request: No valid session ID provided",
+          },
+          id: null,
+        });
+        return;
+      }
+
+      // Handle request with existing transport
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -209,39 +257,48 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
     }
   });
 
-  // GET endpoint for SSE (server-sent events)
+  // GET handler - SSE streams for server-to-client messages
   app.get("/mcp", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+    if (!sessionId || !transports[sessionId]) {
+      logger.warn("GET request with invalid session", { sessionId });
+      res.status(400).json({
+        error: "Invalid or missing session ID",
+      });
+      return;
+    }
+
+    logger.debug("SSE stream request", { sessionId });
+
+    const transport = transports[sessionId];
+    await transport.handleRequest(req, res);
+  });
+
+  // DELETE handler - session termination
+  app.delete("/mcp", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+    if (!sessionId || !transports[sessionId]) {
+      logger.warn("DELETE request with invalid session", { sessionId });
+      res.status(400).json({
+        error: "Invalid or missing session ID",
+      });
+      return;
+    }
+
+    logger.info("Session termination request", { sessionId });
+
     try {
-      const server = gatewayFactory.createServer();
-
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-      });
-
-      res.on("close", () => {
-        transport.close().catch((err) => {
-          logger.error("Error closing transport", err as Error);
-        });
-      });
-
-      await server.connect(transport);
+      const transport = transports[sessionId];
       await transport.handleRequest(req, res);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      logger.error("MCP GET request error", err);
-
+      logger.error("Error handling session termination", err);
       if (!res.headersSent) {
-        res.status(500).json({
-          error: err.message,
-        });
+        res.status(500).json({ error: "Error processing session termination" });
       }
     }
-  });
-
-  // DELETE endpoint for session close
-  app.delete("/mcp", authMiddleware, (_req: AuthenticatedRequest, res: Response) => {
-    // Stateless mode - no session to close
-    res.status(200).json({ status: "ok" });
   });
 
   // Error handling middleware
@@ -272,4 +329,19 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
   });
 
   return app;
+}
+
+// Export for graceful shutdown
+export function closeAllTransports(): Promise<void[]> {
+  const closePromises: Promise<void>[] = [];
+  for (const sessionId in transports) {
+    logger.info("Closing transport", { sessionId });
+    closePromises.push(
+      transports[sessionId].close().catch((err) => {
+        logger.error("Error closing transport", err as Error);
+      })
+    );
+    delete transports[sessionId];
+  }
+  return Promise.all(closePromises);
 }
