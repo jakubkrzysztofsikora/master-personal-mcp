@@ -121,7 +121,7 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
 
   // Custom callback handler for login form submission
   app.post("/oauth/authorize/callback", (req: Request, res: Response) => {
-    const { client_id, redirect_uri, state, scope, code_challenge, email, password } = req.body;
+    const { client_id, redirect_uri, state, scope, code_challenge, resource, email, password } = req.body;
 
     // Get the client (may be a promise)
     Promise.resolve(oauthProvider.clientsStore.getClient(client_id))
@@ -147,7 +147,8 @@ export function createApp(config: GatewayConfig, poolManager: ServerPoolManager)
           redirect_uri,
           user.id,
           scopes,
-          code_challenge
+          code_challenge,
+          resource || undefined
         );
 
         // Redirect back to client with code

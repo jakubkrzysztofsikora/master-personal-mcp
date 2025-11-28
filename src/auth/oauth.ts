@@ -27,6 +27,7 @@ interface AuthorizationCode {
   userId: string;
   scopes: string[];
   expiresAt: number;
+  resource?: string;
 }
 
 interface AccessTokenData {
@@ -35,6 +36,7 @@ interface AccessTokenData {
   userId: string;
   scopes: string[];
   expiresAt: number;
+  resource?: string;
 }
 
 /**
@@ -171,9 +173,10 @@ export class GatewayOAuthProvider implements OAuthServerProvider {
       userId: authCode.userId,
       scopes: authCode.scopes,
       expiresAt,
+      resource: authCode.resource,
     });
 
-    logger.info("Access token created", { clientId: authCode.clientId, userId: authCode.userId });
+    logger.info("Access token created", { clientId: authCode.clientId, userId: authCode.userId, resource: authCode.resource });
 
     return {
       access_token: accessToken,
@@ -224,6 +227,7 @@ export class GatewayOAuthProvider implements OAuthServerProvider {
       clientId: accessToken.clientId,
       scopes: accessToken.scopes,
       expiresAt: Math.floor(accessToken.expiresAt / 1000),
+      resource: accessToken.resource ? new URL(accessToken.resource) : undefined,
     };
   }
 
@@ -245,7 +249,8 @@ export class GatewayOAuthProvider implements OAuthServerProvider {
     redirectUri: string,
     userId: string,
     scopes: string[],
-    codeChallenge: string
+    codeChallenge: string,
+    resource?: string
   ): string {
     const code = generateRandomString(32);
     const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
@@ -258,9 +263,10 @@ export class GatewayOAuthProvider implements OAuthServerProvider {
       userId,
       scopes,
       expiresAt,
+      resource,
     });
 
-    logger.info("Authorization code created", { clientId, userId });
+    logger.info("Authorization code created", { clientId, userId, resource });
     return code;
   }
 
@@ -383,6 +389,7 @@ export class GatewayOAuthProvider implements OAuthServerProvider {
       <input type="hidden" name="state" value="${params.state || ""}">
       <input type="hidden" name="scope" value="${scopes.join(" ")}">
       <input type="hidden" name="code_challenge" value="${params.codeChallenge}">
+      <input type="hidden" name="resource" value="${params.resource?.href || ""}">
 
       <label for="email">Email address</label>
       <input type="email" id="email" name="email" placeholder="you@example.com" required>
